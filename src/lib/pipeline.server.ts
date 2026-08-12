@@ -330,7 +330,12 @@ Scene description: ${scene.image_prompt}`,
               audio.contentType,
             );
             const duration = measureMp3Duration(audio.bytes) || 2;
-            await supabase.from("scene_audio").upsert(
+            await supabase
+              .from("scene_audio")
+              .delete()
+              .eq("scene_id", scene.id)
+              .eq("line_index", nextIndex);
+            await supabase.from("scene_audio").insert([
               {
                 scene_id: scene.id,
                 project_id: projectId,
@@ -341,8 +346,7 @@ Scene description: ${scene.image_prompt}`,
                 audio_path: path,
                 duration,
               },
-              { onConflict: "id" },
-            );
+            ]);
             return {
               stage: "voices",
               progress: STAGE_PROGRESS.voices,
