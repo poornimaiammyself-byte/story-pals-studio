@@ -302,7 +302,7 @@ export function measureMp3Duration(bytes: Uint8Array): number {
   let duration = 0;
   let guard = 0;
   while (i + 4 < bytes.length && guard++ < 500000) {
-    if (bytes[i] !== 0xff || (bytes[i + 1] & 0xe0) !== 0xe0) {
+    if (bytes[i] !== 0xff || (bytes[i + 1]! & 0xe0) !== 0xe0) {
       i++;
       continue;
     }
