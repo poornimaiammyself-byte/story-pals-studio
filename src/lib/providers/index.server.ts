@@ -72,10 +72,10 @@ export type GeneratedBinary = { bytes: Uint8Array; contentType: string };
 function dataUrlToBytes(url: string): GeneratedBinary {
   const match = /^data:([^;]+);base64,(.*)$/s.exec(url);
   if (!match) throw new ProviderError("Image provider returned an unreadable image.");
-  const binary = atob(match[2]);
+  const binary = atob(match[2]!);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return { bytes, contentType: match[1] };
+  return { bytes, contentType: match[1]! };
 }
 
 export const IMAGE_MODEL = "google/gemini-3.1-flash-image";
@@ -261,13 +261,13 @@ export async function generateMusic(opts: {
     const t = i / sampleRate;
     const beatIndex = Math.floor(t / beat);
     const bar = Math.floor(beatIndex / 4) % chords.length;
-    const chord = chords[bar];
+    const chord = chords[bar]!;
     let sample = 0;
     for (const f of chord) {
       sample += 0.12 * Math.sin(2 * Math.PI * f * t) * (0.6 + 0.4 * Math.sin(2 * Math.PI * 0.1 * t));
     }
     // Glockenspiel melody: one note per beat with a fast decay.
-    const note = scale[(beatIndex * 3 + bar * 2) % scale.length] * 2;
+    const note = scale[(beatIndex * 3 + bar * 2) % scale.length]! * 2;
     const env = Math.exp(-6 * (t - beatIndex * beat));
     sample += 0.22 * env * Math.sin(2 * Math.PI * note * t);
     sample += 0.06 * env * Math.sin(4 * Math.PI * note * t);
@@ -293,7 +293,10 @@ export function measureMp3Duration(bytes: Uint8Array): number {
   // Skip ID3v2 tag.
   if (bytes.length > 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
     const size =
-      ((bytes[6] & 0x7f) << 21) | ((bytes[7] & 0x7f) << 14) | ((bytes[8] & 0x7f) << 7) | (bytes[9] & 0x7f);
+      ((bytes[6]! & 0x7f) << 21) |
+      ((bytes[7]! & 0x7f) << 14) |
+      ((bytes[8]! & 0x7f) << 7) |
+      (bytes[9]! & 0x7f);
     i = 10 + size;
   }
   let duration = 0;
@@ -303,13 +306,13 @@ export function measureMp3Duration(bytes: Uint8Array): number {
       i++;
       continue;
     }
-    const versionBits = (bytes[i + 1] >> 3) & 0x03;
-    const bitrateIndex = (bytes[i + 2] >> 4) & 0x0f;
-    const rateIndex = (bytes[i + 2] >> 2) & 0x03;
-    const padding = (bytes[i + 2] >> 1) & 0x01;
+    const versionBits = (bytes[i + 1]! >> 3) & 0x03;
+    const bitrateIndex = (bytes[i + 2]! >> 4) & 0x0f;
+    const rateIndex = (bytes[i + 2]! >> 2) & 0x03;
+    const padding = (bytes[i + 2]! >> 1) & 0x01;
     const isV1 = versionBits === 3;
-    const bitrate = (isV1 ? BITRATES_V1_L3 : BITRATES_V2_L3)[bitrateIndex] * 1000;
-    const sampleRate = (isV1 ? RATES_V1 : RATES_V2)[rateIndex];
+    const bitrate = ((isV1 ? BITRATES_V1_L3 : BITRATES_V2_L3)[bitrateIndex] ?? 0) * 1000;
+    const sampleRate = (isV1 ? RATES_V1 : RATES_V2)[rateIndex] ?? 0;
     if (!bitrate || !sampleRate) {
       i++;
       continue;
