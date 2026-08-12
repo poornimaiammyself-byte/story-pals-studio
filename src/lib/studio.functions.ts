@@ -71,13 +71,13 @@ export const saveCharacter = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { supabase, userId } = context;
     if (data.id) {
-      const { error } = await supabase.from("characters").update(data).eq("id", data.id);
+      const { error } = await supabase.from("characters").update(data as never).eq("id", data.id);
       if (error) throw new Error(error.message);
       return { id: data.id };
     }
     const { data: row, error } = await supabase
       .from("characters")
-      .insert({ ...data, user_id: userId })
+      .insert({ ...data, user_id: userId } as never)
       .select()
       .single();
     if (error) throw new Error(error.message);
@@ -245,7 +245,7 @@ export const updateProject = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { error } = await context.supabase
       .from("projects")
-      .update(data.patch)
+      .update(data.patch as never)
       .eq("id", data.projectId);
     if (error) throw new Error(error.message);
     return { ok: true };
