@@ -1,10 +1,15 @@
 import {
   Output,
   Mp4OutputFormat,
+  WebMOutputFormat,
   BufferTarget,
   CanvasSource,
   AudioBufferSource,
-  QUALITY_HIGH,
+  QUALITY_MEDIUM,
+  getFirstEncodableVideoCodec,
+  getFirstEncodableAudioCodec,
+  type VideoCodec,
+  type AudioCodec,
 } from "mediabunny";
 
 export type RenderScene = {
