@@ -1,10 +1,15 @@
 import {
   Output,
   Mp4OutputFormat,
+  WebMOutputFormat,
   BufferTarget,
   CanvasSource,
   AudioBufferSource,
-  QUALITY_HIGH,
+  QUALITY_MEDIUM,
+  getFirstEncodableVideoCodec,
+  getFirstEncodableAudioCodec,
+  type VideoCodec,
+  type AudioCodec,
 } from "mediabunny";
 
 export type RenderScene = {
@@ -223,21 +228,66 @@ async function mixAudio(
   return ctx.startRendering();
 }
 
+/**
+ * Encoders can accept a configuration and still fail part-way through, so the
+ * public entry point walks a candidate list and retries with the next codec.
+ */
 export async function renderProjectVideo(input: RenderInput): Promise<RenderOutput> {
   if (typeof window === "undefined") throw new Error("Rendering must run in the browser.");
   const { width, height } = dimensions(input.aspectRatio);
+  const opts = { width, height, bitrate: QUALITY_MEDIUM };
+  const mp4Codecs = new Mp4OutputFormat().getSupportedVideoCodecs();
+  const webmCodecs = new WebMOutputFormat().getSupportedVideoCodecs();
+
+  const candidates: { codec: VideoCodec; container: "mp4" | "webm" }[] = [];
+  for (const codec of mp4Codecs) candidates.push({ codec, container: "mp4" });
+  for (const codec of webmCodecs) candidates.push({ codec, container: "webm" });
+
+  let lastError: Error | null = null;
+  for (const candidate of candidates) {
+    if (!(await getFirstEncodableVideoCodec([candidate.codec], opts))) continue;
+    try {
+      return await encodeProject(input, candidate.codec, candidate.container, width, height);
+    } catch (err) {
+      lastError = err as Error;
+    }
+  }
+  throw new Error(
+    lastError
+      ? `Video encoding failed in this browser: ${lastError.message}`
+      : "This browser cannot encode video. Try Chrome or Edge on desktop.",
+  );
+}
+
+async function encodeProject(
+  input: RenderInput,
+  videoCodec: VideoCodec,
+  container: "mp4" | "webm",
+  width: number,
+  height: number,
+): Promise<RenderOutput> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("Canvas is unavailable in this browser.");
 
-  const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-  const videoSource = new CanvasSource(canvas, { codec: "avc", bitrate: QUALITY_HIGH });
-  const audioSource = new AudioBufferSource({ codec: "aac", bitrate: QUALITY_HIGH });
+  const format = container === "mp4" ? new Mp4OutputFormat() : new WebMOutputFormat();
+  const audioCodec = await getFirstEncodableAudioCodec(format.getSupportedAudioCodecs(), {
+    numberOfChannels: 2,
+    sampleRate: 44100,
+  });
+
+  const output = new Output({ format, target: new BufferTarget() });
+  const videoSource = new CanvasSource(canvas, { codec: videoCodec, bitrate: QUALITY_MEDIUM });
+  const audioSource = audioCodec
+    ? new AudioBufferSource({ codec: audioCodec as AudioCodec, bitrate: QUALITY_MEDIUM })
+    : null;
   output.addVideoTrack(videoSource, { frameRate: FPS });
-  output.addAudioTrack(audioSource);
+  if (audioSource) output.addAudioTrack(audioSource);
   await output.start();
+
+
 
   const INTRO = 3;
   const OUTRO = 3;
@@ -303,20 +353,23 @@ export async function renderProjectVideo(input: RenderInput): Promise<RenderOutp
   }
 
   input.onProgress?.(94, "Encoding audio");
-  await audioSource.add(mixed);
-  audioSource.close();
+  if (audioSource) {
+    await audioSource.add(mixed);
+    audioSource.close();
+  }
   videoSource.close();
-  input.onProgress?.(97, "Finalizing MP4");
+  input.onProgress?.(97, "Finalizing the video file");
   await output.finalize();
 
   const buffer = (output.target as BufferTarget).buffer;
   if (!buffer) throw new Error("Video encoding produced no data.");
   return {
-    blob: new Blob([buffer], { type: "video/mp4" }),
+    blob: new Blob([buffer], { type: container === "mp4" ? "video/mp4" : "video/webm" }),
     duration: totalDuration,
     width,
     height,
   };
+
 }
 
 export async function blobToBase64(blob: Blob): Promise<string> {
