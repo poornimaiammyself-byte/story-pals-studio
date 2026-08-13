@@ -237,12 +237,35 @@ export async function renderProjectVideo(input: RenderInput): Promise<RenderOutp
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("Canvas is unavailable in this browser.");
 
-  const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-  const videoSource = new CanvasSource(canvas, { codec: "avc", bitrate: QUALITY_HIGH });
-  const audioSource = new AudioBufferSource({ codec: "aac", bitrate: QUALITY_HIGH });
+  // Pick codecs this browser can actually encode; MP4 is preferred, WebM is the fallback.
+  const mp4 = new Mp4OutputFormat();
+  const webm = new WebMOutputFormat();
+  const videoOpts = { width, height, bitrate: QUALITY_MEDIUM };
+  let format: Mp4OutputFormat | WebMOutputFormat = mp4;
+  let videoCodec = await getFirstEncodableVideoCodec(mp4.getSupportedVideoCodecs(), videoOpts);
+  if (!videoCodec) {
+    videoCodec = await getFirstEncodableVideoCodec(webm.getSupportedVideoCodecs(), videoOpts);
+    format = webm;
+  }
+  if (!videoCodec) throw new Error("This browser cannot encode video. Try Chrome or Edge on desktop.");
+
+  const audioCodec = await getFirstEncodableAudioCodec(
+    (format as Mp4OutputFormat).getSupportedAudioCodecs(),
+    { numberOfChannels: 2, sampleRate: 44100 },
+  );
+
+  const output = new Output({ format, target: new BufferTarget() });
+  const videoSource = new CanvasSource(canvas, {
+    codec: videoCodec as VideoCodec,
+    bitrate: QUALITY_MEDIUM,
+  });
+  const audioSource = audioCodec
+    ? new AudioBufferSource({ codec: audioCodec as AudioCodec, bitrate: QUALITY_MEDIUM })
+    : null;
   output.addVideoTrack(videoSource, { frameRate: FPS });
-  output.addAudioTrack(audioSource);
+  if (audioSource) output.addAudioTrack(audioSource);
   await output.start();
+
 
   const INTRO = 3;
   const OUTRO = 3;
