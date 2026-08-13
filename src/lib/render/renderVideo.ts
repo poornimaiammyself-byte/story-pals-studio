@@ -331,20 +331,23 @@ export async function renderProjectVideo(input: RenderInput): Promise<RenderOutp
   }
 
   input.onProgress?.(94, "Encoding audio");
-  await audioSource.add(mixed);
-  audioSource.close();
+  if (audioSource) {
+    await audioSource.add(mixed);
+    audioSource.close();
+  }
   videoSource.close();
-  input.onProgress?.(97, "Finalizing MP4");
+  input.onProgress?.(97, "Finalizing the video file");
   await output.finalize();
 
   const buffer = (output.target as BufferTarget).buffer;
   if (!buffer) throw new Error("Video encoding produced no data.");
   return {
-    blob: new Blob([buffer], { type: "video/mp4" }),
+    blob: new Blob([buffer], { type: format === mp4 ? "video/mp4" : "video/webm" }),
     duration: totalDuration,
     width,
     height,
   };
+
 }
 
 export async function blobToBase64(blob: Blob): Promise<string> {
