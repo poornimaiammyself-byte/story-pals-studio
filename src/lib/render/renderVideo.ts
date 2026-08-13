@@ -228,43 +228,65 @@ async function mixAudio(
   return ctx.startRendering();
 }
 
+/**
+ * Encoders can accept a configuration and still fail part-way through, so the
+ * public entry point walks a candidate list and retries with the next codec.
+ */
 export async function renderProjectVideo(input: RenderInput): Promise<RenderOutput> {
   if (typeof window === "undefined") throw new Error("Rendering must run in the browser.");
   const { width, height } = dimensions(input.aspectRatio);
+  const opts = { width, height, bitrate: QUALITY_MEDIUM };
+  const mp4Codecs = new Mp4OutputFormat().getSupportedVideoCodecs();
+  const webmCodecs = new WebMOutputFormat().getSupportedVideoCodecs();
+
+  const candidates: { codec: VideoCodec; container: "mp4" | "webm" }[] = [];
+  for (const codec of mp4Codecs) candidates.push({ codec, container: "mp4" });
+  for (const codec of webmCodecs) candidates.push({ codec, container: "webm" });
+
+  let lastError: Error | null = null;
+  for (const candidate of candidates) {
+    if (!(await getFirstEncodableVideoCodec([candidate.codec], opts))) continue;
+    try {
+      return await encodeProject(input, candidate.codec, candidate.container, width, height);
+    } catch (err) {
+      lastError = err as Error;
+    }
+  }
+  throw new Error(
+    lastError
+      ? `Video encoding failed in this browser: ${lastError.message}`
+      : "This browser cannot encode video. Try Chrome or Edge on desktop.",
+  );
+}
+
+async function encodeProject(
+  input: RenderInput,
+  videoCodec: VideoCodec,
+  container: "mp4" | "webm",
+  width: number,
+  height: number,
+): Promise<RenderOutput> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("Canvas is unavailable in this browser.");
 
-  // Pick codecs this browser can actually encode; MP4 is preferred, WebM is the fallback.
-  const mp4 = new Mp4OutputFormat();
-  const webm = new WebMOutputFormat();
-  const videoOpts = { width, height, bitrate: QUALITY_MEDIUM };
-  let format: Mp4OutputFormat | WebMOutputFormat = mp4;
-  let videoCodec = await getFirstEncodableVideoCodec(mp4.getSupportedVideoCodecs(), videoOpts);
-  if (!videoCodec) {
-    videoCodec = await getFirstEncodableVideoCodec(webm.getSupportedVideoCodecs(), videoOpts);
-    format = webm;
-  }
-  if (!videoCodec) throw new Error("This browser cannot encode video. Try Chrome or Edge on desktop.");
-
-  const audioCodec = await getFirstEncodableAudioCodec(
-    (format as Mp4OutputFormat).getSupportedAudioCodecs(),
-    { numberOfChannels: 2, sampleRate: 44100 },
-  );
+  const format = container === "mp4" ? new Mp4OutputFormat() : new WebMOutputFormat();
+  const audioCodec = await getFirstEncodableAudioCodec(format.getSupportedAudioCodecs(), {
+    numberOfChannels: 2,
+    sampleRate: 44100,
+  });
 
   const output = new Output({ format, target: new BufferTarget() });
-  const videoSource = new CanvasSource(canvas, {
-    codec: videoCodec as VideoCodec,
-    bitrate: QUALITY_MEDIUM,
-  });
+  const videoSource = new CanvasSource(canvas, { codec: videoCodec, bitrate: QUALITY_MEDIUM });
   const audioSource = audioCodec
     ? new AudioBufferSource({ codec: audioCodec as AudioCodec, bitrate: QUALITY_MEDIUM })
     : null;
   output.addVideoTrack(videoSource, { frameRate: FPS });
   if (audioSource) output.addAudioTrack(audioSource);
   await output.start();
+
 
 
   const INTRO = 3;
