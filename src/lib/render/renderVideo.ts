@@ -364,7 +364,7 @@ async function encodeProject(
   const buffer = (output.target as BufferTarget).buffer;
   if (!buffer) throw new Error("Video encoding produced no data.");
   return {
-    blob: new Blob([buffer], { type: format === mp4 ? "video/mp4" : "video/webm" }),
+    blob: new Blob([buffer], { type: container === "mp4" ? "video/mp4" : "video/webm" }),
     duration: totalDuration,
     width,
     height,
