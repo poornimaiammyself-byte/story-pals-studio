@@ -234,8 +234,22 @@ async function mixAudio(
  */
 export async function renderProjectVideo(input: RenderInput): Promise<RenderOutput> {
   if (typeof window === "undefined") throw new Error("Rendering must run in the browser.");
+  // A production without artwork would encode to nothing but the intro/outro
+  // cards, so refuse instead of shipping an empty two-slide video.
+  if (!input.scenes.length) {
+    throw new Error("No scenes were generated yet, so there is nothing to render. Re-run the production.");
+  }
+  const withVisuals = input.scenes.filter((s) => s.imageUrl || s.videoUrl).length;
+  if (!withVisuals) {
+    throw new Error("Scene artwork is missing, so the video would be blank. Re-run the artwork stage first.");
+  }
+  const withAudio = input.scenes.some((s) => s.audio.some((line) => line.url));
+  if (!withAudio && !input.musicUrl) {
+    throw new Error("No voice or music tracks were generated, so the video would be silent. Re-run the voice stage first.");
+  }
   const { width, height } = dimensions(input.aspectRatio);
   const opts = { width, height, bitrate: QUALITY_MEDIUM };
+
   const mp4Codecs = new Mp4OutputFormat().getSupportedVideoCodecs();
   const webmCodecs = new WebMOutputFormat().getSupportedVideoCodecs();
 
