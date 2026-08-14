@@ -401,6 +401,7 @@ export const saveRenderedVideo = createServerFn({ method: "POST" })
         durationSeconds: z.number(),
         width: z.number(),
         height: z.number(),
+        mimeType: z.string().optional(),
       })
       .parse(d),
   )
@@ -409,11 +410,15 @@ export const saveRenderedVideo = createServerFn({ method: "POST" })
     const binary = atob(data.base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const path = `${userId}/projects/${data.projectId}/final-${Date.now()}.mp4`;
+    // The browser encoder can fall back to WebM, so the stored file must carry
+    // the real container. A WebM saved as .mp4 plays as a blank, silent file.
+    const mime = data.mimeType === "video/webm" ? "video/webm" : "video/mp4";
+    const ext = mime === "video/webm" ? "webm" : "mp4";
+    const path = `${userId}/projects/${data.projectId}/final-${Date.now()}.${ext}`;
     const { error } = await supabase.storage
       .from("studio-media")
-      .upload(path, new Blob([bytes as BlobPart], { type: "video/mp4" }), {
-        contentType: "video/mp4",
+      .upload(path, new Blob([bytes as BlobPart], { type: mime }), {
+        contentType: mime,
         upsert: true,
       });
     if (error) throw new Error(error.message);
