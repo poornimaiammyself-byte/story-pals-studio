@@ -1,6 +1,11 @@
 // Server-only provider abstraction. API keys remain server-side.
-// Core generation can run without Lovable credits: OpenAI handles script,
-// images and speech; Replicate handles image-to-video animation.
+//
+// Provider selection is automatic:
+//  - OpenAI is used when OPENAI_API_KEY is configured, otherwise the built-in
+//    managed AI service handles script, artwork and speech.
+//  - Replicate is used when REPLICATE_API_TOKEN is configured, otherwise the
+//    built-in managed video model animates the scene artwork.
+// This keeps the studio fully functional out of the box.
 
 export class ProviderError extends Error {
   constructor(message: string, public readonly kind: "config" | "provider" = "provider") {
@@ -12,37 +17,63 @@ export type GeneratedBinary = { bytes: Uint8Array; contentType: string };
 
 const OPENAI_API = "https://api.openai.com/v1";
 const REPLICATE_API = "https://api.replicate.com/v1";
+const GATEWAY_API = "https://ai.gateway.lovable.dev/v1";
 
-function requireEnv(name: string): string {
+function env(name: string): string | undefined {
   const value = process.env[name];
-  if (!value) throw new ProviderError(`Missing credential ${name}. Configure it in the server environment.`, "config");
-  return value;
+  return value && value.trim() ? value.trim() : undefined;
 }
 
-function openaiHeaders() {
-  return { Authorization: `Bearer ${requireEnv("OPENAI_API_KEY")}`, "Content-Type": "application/json" };
+/** Resolves the text/image/voice backend: direct OpenAI, else managed gateway. */
+function textStack() {
+  const openai = env("OPENAI_API_KEY");
+  if (openai) {
+    return {
+      base: OPENAI_API,
+      headers: { Authorization: `Bearer ${openai}`, "Content-Type": "application/json" },
+      textModel: env("OPENAI_TEXT_MODEL") || "gpt-5-mini",
+      imageModel: env("OPENAI_IMAGE_MODEL") || "gpt-image-1",
+      ttsModel: env("OPENAI_TTS_MODEL") || "gpt-4o-mini-tts",
+    };
+  }
+  const managed = env("LOVABLE_API_KEY");
+  if (!managed) {
+    throw new ProviderError(
+      "No AI provider is configured. Add an OPENAI_API_KEY or enable the built-in AI service.",
+      "config",
+    );
+  }
+  return {
+    base: GATEWAY_API,
+    headers: { Authorization: `Bearer ${managed}`, "Content-Type": "application/json" },
+    textModel: env("OPENAI_TEXT_MODEL") || "google/gemini-3.5-flash",
+    imageModel: env("OPENAI_IMAGE_MODEL") || "google/gemini-3.1-flash-image",
+    ttsModel: env("OPENAI_TTS_MODEL") || "openai/gpt-4o-mini-tts",
+  };
 }
 
 function replicateHeaders() {
-  return { Authorization: `Bearer ${requireEnv("REPLICATE_API_TOKEN")}` };
+  const token = env("REPLICATE_API_TOKEN");
+  if (!token) throw new ProviderError("Missing credential REPLICATE_API_TOKEN.", "config");
+  return { Authorization: `Bearer ${token}` };
 }
 
 async function providerError(res: Response, what: string): Promise<never> {
   const body = await res.text();
   if (res.status === 429) throw new ProviderError(`${what}: rate limited. Please retry.`);
-  if (res.status === 402) throw new ProviderError(`${what}: provider credits are exhausted.`);
+  if (res.status === 402) throw new ProviderError(`${what}: AI credits are exhausted.`);
   throw new ProviderError(`${what} failed [${res.status}]: ${body.slice(0, 500)}`);
 }
 
 /* ---------------------------------- text ---------------------------------- */
 
 export async function chatJson<T>(_model: string, system: string, user: string): Promise<T> {
-  const model = process.env.OPENAI_TEXT_MODEL || "gpt-5-mini";
-  const res = await fetch(`${OPENAI_API}/chat/completions`, {
+  const stack = textStack();
+  const res = await fetch(`${stack.base}/chat/completions`, {
     method: "POST",
-    headers: openaiHeaders(),
+    headers: stack.headers,
     body: JSON.stringify({
-      model,
+      model: stack.textModel,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -69,44 +100,53 @@ function base64ToBinary(b64: string, contentType = "image/png"): GeneratedBinary
   return { bytes, contentType };
 }
 
-export const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
+export const IMAGE_MODEL = env("OPENAI_IMAGE_MODEL") || "gemini/openai image model";
 
 /**
- * OpenAI image generation intentionally receives the complete character/style
- * description in the prompt. Reference-image plumbing remains supported by
- * the function signature so the rest of the application does not change.
+ * The full character/style description travels in the prompt so scene artwork
+ * stays consistent across the series regardless of which backend is active.
  */
 export async function generateSceneImage(opts: { prompt: string; referenceImages: string[] }): Promise<GeneratedBinary> {
-  const res = await fetch(`${OPENAI_API}/images/generations`, {
+  const stack = textStack();
+  const body: Record<string, unknown> = {
+    model: stack.imageModel,
+    prompt: `${opts.prompt}\nMaintain consistent characters, clothing, colors and art style across the series.`,
+    size: "1024x1024",
+  };
+  if (stack.base === OPENAI_API) {
+    body['quality'] = "medium";
+    body['output_format'] = "png";
+  }
+  const res = await fetch(`${stack.base}/images/generations`, {
     method: "POST",
-    headers: openaiHeaders(),
-    body: JSON.stringify({
-      model: IMAGE_MODEL,
-      prompt: `${opts.prompt}\nMaintain consistent characters, clothing, colors and art style across the series.`,
-      size: "1024x1024",
-      quality: "medium",
-      output_format: "png",
-    }),
+    headers: stack.headers,
+    body: JSON.stringify(body),
   });
   if (!res.ok) await providerError(res, "Image generation");
-  const data = (await res.json()) as { data?: { b64_json?: string }[] };
-  const b64 = data.data?.[0]?.b64_json;
-  if (!b64) throw new ProviderError("Image provider returned no image.");
-  return base64ToBinary(b64);
+  const data = (await res.json()) as { data?: { b64_json?: string; url?: string }[] };
+  const entry = data.data?.[0];
+  if (entry?.b64_json) return base64ToBinary(entry.b64_json);
+  if (entry?.url) {
+    const img = await fetch(entry.url);
+    if (!img.ok) throw new ProviderError("Image download failed.");
+    return { bytes: new Uint8Array(await img.arrayBuffer()), contentType: img.headers.get("content-type") || "image/png" };
+  }
+  throw new ProviderError("Image provider returned no image.");
 }
 
 /* ---------------------------------- voice ---------------------------------- */
 
-export const VOICE_MODEL = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
+export const VOICE_MODEL = env("OPENAI_TTS_MODEL") || "gpt-4o-mini-tts";
 
 export async function generateSpeech(opts: { text: string; voiceId: string; instructions?: string }): Promise<GeneratedBinary> {
+  const stack = textStack();
   const allowed = new Set(["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]);
   const voice = allowed.has(opts.voiceId) ? opts.voiceId : "shimmer";
-  const res = await fetch(`${OPENAI_API}/audio/speech`, {
+  const res = await fetch(`${stack.base}/audio/speech`, {
     method: "POST",
-    headers: openaiHeaders(),
+    headers: stack.headers,
     body: JSON.stringify({
-      model: VOICE_MODEL,
+      model: stack.ttsModel,
       input: opts.text,
       voice,
       response_format: "mp3",
@@ -127,7 +167,7 @@ async function replicateFileUrl(dataUrl: string): Promise<string> {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   const form = new FormData();
-  form.append("content", new Blob([bytes], { type: match[1] }), "scene.png");
+  form.append("content", new Blob([bytes], { type: match[1] ?? "image/png" }), "scene.png");
   const upload = await fetch(`${REPLICATE_API}/files`, { method: "POST", headers: replicateHeaders(), body: form });
   if (!upload.ok) await providerError(upload, "Animation image upload");
   const file = (await upload.json()) as { urls?: { get?: string } };
@@ -135,12 +175,7 @@ async function replicateFileUrl(dataUrl: string): Promise<string> {
   return file.urls.get;
 }
 
-/** Real image-to-video animation through Replicate's official P-Video model. */
-export async function generateSceneAnimation(opts: {
-  imageDataUrl: string;
-  prompt: string;
-  seconds: 4 | 6 | 8;
-}): Promise<GeneratedBinary | null> {
+async function replicateAnimation(opts: { imageDataUrl: string; prompt: string; seconds: 4 | 6 | 8 }): Promise<GeneratedBinary> {
   const image = await replicateFileUrl(opts.imageDataUrl);
   const create = await fetch(`${REPLICATE_API}/models/prunaai/p-video/predictions`, {
     method: "POST",
@@ -176,6 +211,48 @@ export async function generateSceneAnimation(opts: {
   return { bytes: new Uint8Array(await video.arrayBuffer()), contentType: "video/mp4" };
 }
 
+/** Managed image-to-video animation (Veo) used when Replicate is not configured. */
+async function managedAnimation(opts: { imageDataUrl: string; prompt: string; seconds: 4 | 6 | 8 }): Promise<GeneratedBinary> {
+  const key = env("LOVABLE_API_KEY");
+  if (!key) throw new ProviderError("No animation provider is configured.", "config");
+  const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+  const create = await fetch(`${GATEWAY_API}/videos`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: "google/veo-3.1-lite",
+      prompt: opts.prompt,
+      seconds: String(opts.seconds === 4 ? 4 : opts.seconds === 6 ? 6 : 8),
+      size: "1280x720",
+      input_reference: opts.imageDataUrl,
+    }),
+  });
+  if (!create.ok) await providerError(create, "Animation generation");
+  let job = (await create.json()) as { id?: string; status?: string; error?: { message?: string } };
+  if (!job.id) throw new ProviderError("Animation provider returned no job id.");
+  for (let i = 0; i < 40 && job.status !== "completed"; i++) {
+    if (job.status === "failed") throw new ProviderError(job.error?.message || "Animation generation failed.");
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    const poll = await fetch(`${GATEWAY_API}/videos/${job.id}`, { headers });
+    if (!poll.ok) await providerError(poll, "Animation polling");
+    job = (await poll.json()) as typeof job;
+  }
+  if (job.status !== "completed") throw new ProviderError("Animation timed out.");
+  const content = await fetch(`${GATEWAY_API}/videos/${job.id}/content`, { headers: { Authorization: `Bearer ${key}` } });
+  if (!content.ok) throw new ProviderError("Animation video download failed.");
+  return { bytes: new Uint8Array(await content.arrayBuffer()), contentType: "video/mp4" };
+}
+
+/** Real image-to-video animation so characters actually move and lip-sync. */
+export async function generateSceneAnimation(opts: {
+  imageDataUrl: string;
+  prompt: string;
+  seconds: 4 | 6 | 8;
+}): Promise<GeneratedBinary | null> {
+  if (env("REPLICATE_API_TOKEN")) return replicateAnimation(opts);
+  return managedAnimation(opts);
+}
+
 /* ---------------------------------- music ---------------------------------- */
 
 function writeWavHeader(view: DataView, samples: number, sampleRate: number) {
@@ -187,8 +264,8 @@ function writeWavHeader(view: DataView, samples: number, sampleRate: number) {
 }
 
 export async function generateMusic(opts: { seconds: number; seed?: number }): Promise<GeneratedBinary> {
-  const url = process.env.MUSIC_API_URL;
-  const key = process.env.MUSIC_API_KEY;
+  const url = env("MUSIC_API_URL");
+  const key = env("MUSIC_API_KEY");
   if (url && key) {
     const res = await fetch(url, {
       method: "POST",
@@ -209,8 +286,8 @@ export async function generateMusic(opts: { seconds: number; seed?: number }): P
     const t = i / sampleRate; const beatIndex = Math.floor(t / beat); const chord = chords[Math.floor(beatIndex / 4) % chords.length]!;
     let sample = 0;
     for (const f of chord) sample += 0.12 * Math.sin(2 * Math.PI * f * t);
-    const note = scale[(beatIndex * 3) % scale.length]! * 2; const env = Math.exp(-6 * (t - beatIndex * beat));
-    sample += 0.22 * env * Math.sin(2 * Math.PI * note * t);
+    const note = scale[(beatIndex * 3) % scale.length]! * 2; const env2 = Math.exp(-6 * (t - beatIndex * beat));
+    sample += 0.22 * env2 * Math.sin(2 * Math.PI * note * t);
     const fade = Math.min(1, t / 1.5, (total / sampleRate - t) / 2);
     view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample * Math.max(0, fade) * 0.7)) * 32767, true);
   }
