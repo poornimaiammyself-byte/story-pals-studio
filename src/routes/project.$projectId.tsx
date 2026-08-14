@@ -120,6 +120,7 @@ function ProjectPage() {
         durationSeconds: result.duration,
         width: result.width,
         height: result.height,
+        mimeType: result.blob.type || "video/mp4",
       },
     });
     setRenderPct(null);
