@@ -39,8 +39,14 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
-    reportLovableError(error, { boundary: "tanstack_root_error_component" });
+    try {
+      reportLovableError(error, { boundary: "tanstack_root_error_component" });
+    } catch {
+      // Never let error reporting hide the original failure.
+    }
   }, [error]);
+
+  const detail = `${error?.name ?? "Error"}: ${error?.message ?? "Unknown error"}\n${error?.stack ?? ""}`;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -51,6 +57,18 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <p className="mt-2 text-sm text-muted-foreground">
           Something went wrong on our end. You can try refreshing or head back home.
         </p>
+        <p className="mt-3 break-words rounded-md bg-muted px-3 py-2 text-left text-xs text-foreground">
+          {error?.message || "Unknown error"}
+        </p>
+        <details className="mt-2 text-left">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            Technical details
+          </summary>
+          <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-[11px] text-muted-foreground">
+            {detail}
+          </pre>
+        </details>
+
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {

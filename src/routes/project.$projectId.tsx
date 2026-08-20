@@ -12,7 +12,7 @@ import {
   updateProject,
   updateScene,
 } from "@/lib/studio.functions";
-import { renderProjectVideo, blobToBase64, type RenderScene } from "@/lib/render/renderVideo";
+import type { RenderScene } from "@/lib/render/renderVideo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -65,6 +65,7 @@ function ProjectPage() {
   const queryClient = useQueryClient();
   const [running, setRunning] = useState(false);
   const [renderPct, setRenderPct] = useState<{ pct: number; label: string } | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const startedRef = useRef(false);
 
   const bundle = useQuery({
@@ -78,6 +79,14 @@ function ProjectPage() {
   );
 
   const renderFinal = useCallback(async () => {
+    // The browser video encoder is heavy and unsupported on several mobile
+    // browsers, so it is only loaded when a render actually starts.
+    if (typeof window === "undefined" || typeof (window as { VideoEncoder?: unknown }).VideoEncoder === "undefined") {
+      throw new Error(
+        "This browser can't assemble video (no WebCodecs support). Open the project in a desktop browser such as Chrome or Edge to render the MP4.",
+      );
+    }
+    const { renderProjectVideo, blobToBase64 } = await import("@/lib/render/renderVideo");
     const fresh = (await getStoryBundle({ data: { projectId } })) as Bundle;
     const project = fresh.project;
     const scenes: RenderScene[] = fresh.scenes.map((s) => ({
@@ -129,6 +138,7 @@ function ProjectPage() {
   const runPipeline = useCallback(async () => {
     if (running) return;
     setRunning(true);
+    setRenderError(null);
     try {
       for (let i = 0; i < 400; i++) {
         const step = await advanceStoryPipeline({ data: { projectId } });
@@ -142,8 +152,11 @@ function ProjectPage() {
       }
       toast.success("Production finished.");
     } catch (err) {
+      // Failures stay on the page as a retryable message instead of bubbling
+      // up to the root error boundary and blanking the whole app.
       setRenderPct(null);
       const message = (err as Error).message;
+      setRenderError(message);
       await reportRenderFailure({ data: { projectId, message } }).catch(() => {});
       await refresh();
       toast.error(message);
@@ -190,11 +203,14 @@ function ProjectPage() {
               variant="outline"
               onClick={async () => {
                 setRunning(true);
+                setRenderError(null);
                 try {
                   await renderFinal();
                   await refresh();
                   toast.success("Video re-rendered.");
                 } catch (e) {
+                  setRenderPct(null);
+                  setRenderError((e as Error).message);
                   toast.error((e as Error).message);
                 } finally {
                   setRunning(false);
@@ -207,6 +223,23 @@ function ProjectPage() {
           )}
         </div>
       </header>
+
+      {renderError && (
+        <div className="mb-6 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="font-semibold text-destructive">Production stopped</p>
+          <p className="mt-1 text-sm text-destructive/90">{renderError}</p>
+          <Button
+            className="mt-3"
+            size="sm"
+            variant="outline"
+            onClick={() => void runPipeline()}
+            disabled={running}
+          >
+            Retry render
+          </Button>
+        </div>
+      )}
+
 
       <Card className="mb-6">
         <CardHeader className="pb-3">
