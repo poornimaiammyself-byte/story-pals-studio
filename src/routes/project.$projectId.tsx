@@ -138,6 +138,7 @@ function ProjectPage() {
   const runPipeline = useCallback(async () => {
     if (running) return;
     setRunning(true);
+    setRenderError(null);
     try {
       for (let i = 0; i < 400; i++) {
         const step = await advanceStoryPipeline({ data: { projectId } });
@@ -151,8 +152,11 @@ function ProjectPage() {
       }
       toast.success("Production finished.");
     } catch (err) {
+      // Failures stay on the page as a retryable message instead of bubbling
+      // up to the root error boundary and blanking the whole app.
       setRenderPct(null);
       const message = (err as Error).message;
+      setRenderError(message);
       await reportRenderFailure({ data: { projectId, message } }).catch(() => {});
       await refresh();
       toast.error(message);
