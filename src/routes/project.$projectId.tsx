@@ -65,6 +65,7 @@ function ProjectPage() {
   const queryClient = useQueryClient();
   const [running, setRunning] = useState(false);
   const [renderPct, setRenderPct] = useState<{ pct: number; label: string } | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const startedRef = useRef(false);
 
   const bundle = useQuery({
