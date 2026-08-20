@@ -203,11 +203,14 @@ function ProjectPage() {
               variant="outline"
               onClick={async () => {
                 setRunning(true);
+                setRenderError(null);
                 try {
                   await renderFinal();
                   await refresh();
                   toast.success("Video re-rendered.");
                 } catch (e) {
+                  setRenderPct(null);
+                  setRenderError((e as Error).message);
                   toast.error((e as Error).message);
                 } finally {
                   setRunning(false);
@@ -220,6 +223,23 @@ function ProjectPage() {
           )}
         </div>
       </header>
+
+      {renderError && (
+        <div className="mb-6 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+          <p className="font-semibold text-destructive">Production stopped</p>
+          <p className="mt-1 text-sm text-destructive/90">{renderError}</p>
+          <Button
+            className="mt-3"
+            size="sm"
+            variant="outline"
+            onClick={() => void runPipeline()}
+            disabled={running}
+          >
+            Retry render
+          </Button>
+        </div>
+      )}
+
 
       <Card className="mb-6">
         <CardHeader className="pb-3">
