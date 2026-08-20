@@ -12,7 +12,7 @@ import {
   updateProject,
   updateScene,
 } from "@/lib/studio.functions";
-import { renderProjectVideo, blobToBase64, type RenderScene } from "@/lib/render/renderVideo";
+import type { RenderScene } from "@/lib/render/renderVideo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
