@@ -79,6 +79,14 @@ function ProjectPage() {
   );
 
   const renderFinal = useCallback(async () => {
+    // The browser video encoder is heavy and unsupported on several mobile
+    // browsers, so it is only loaded when a render actually starts.
+    if (typeof window === "undefined" || typeof (window as { VideoEncoder?: unknown }).VideoEncoder === "undefined") {
+      throw new Error(
+        "This browser can't assemble video (no WebCodecs support). Open the project in a desktop browser such as Chrome or Edge to render the MP4.",
+      );
+    }
+    const { renderProjectVideo, blobToBase64 } = await import("@/lib/render/renderVideo");
     const fresh = (await getStoryBundle({ data: { projectId } })) as Bundle;
     const project = fresh.project;
     const scenes: RenderScene[] = fresh.scenes.map((s) => ({
